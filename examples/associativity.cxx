@@ -6,6 +6,8 @@
 #include "cuda_runtime.h"
 #include "nccl.h"
 #include <stdlib.h>
+#include <unistd.h>
+
 
 #define CUDACHECK(cmd) do {                         \
   cudaError_t e = cmd;                              \
@@ -72,9 +74,9 @@ int main(int argc, char *argv[]) {
         srand(20214229*i);
 
         for(int j = 0; j<size; ++j){
-          data[i][j] = (float)rand()/(RAND_MAX);
+          data[i][j] = i;//(float)rand()/(RAND_MAX/100);
         }
-        
+
         CUDACHECK(cudaSetDevice(i));
         CUDACHECK(cudaMalloc(sendbuff + i, size * sizeof(float)));
         CUDACHECK(cudaMalloc(recvbuff + i, size * sizeof(float)));
@@ -84,10 +86,19 @@ int main(int argc, char *argv[]) {
     }
 
     //Communication starts here
-    int group[2] = {2,3};
-    int gDevs = 2;
+    int group1[2] = {2,3};
+    performAllReduce(2, group1, sendbuff, recvbuff, s, size);
+    sleep(1);
 
-    performAllReduce(gDevs, group, sendbuff, recvbuff, s, size);
+    int group2[2] = {0,1};
+    performAllReduce(2, group2, sendbuff, recvbuff, s, size);
+    
+    sleep(1);
+    int group3[2] = {1,2};
+    performAllReduce(2, group3, sendbuff, recvbuff, s, size);
+    
+    // int group1[4] = {0,1,2,3};
+    // performAllReduce(4, group1, sendbuff, recvbuff, s, size);
 
     for (int i = 0; i < nDev; ++i) {
         CUDACHECK(cudaSetDevice(i));
@@ -96,10 +107,10 @@ int main(int argc, char *argv[]) {
         CUDACHECK(cudaFree(recvbuff[i]));
     }
     
-    printf("%.12f \n", data[0][12345]);
-    printf("%.12f \n", data[1][12345]);
-    printf("%.12f \n", data[2][12345]);
-    printf("%.12f \n", data[3][12345]);
+    printf("%.12f \n", data[0][1434]);
+    printf("%.12f \n", data[1][1434]);
+    printf("%.12f \n", data[2][1434]);
+    printf("%.12f \n", data[3][1434]);
 
 
    

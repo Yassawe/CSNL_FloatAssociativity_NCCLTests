@@ -72,7 +72,6 @@ int finishup(int nDev, half** buff, half** output, int size){
     return 0;
 }
 
-
 void stats(float* difference, int size){
     float max = difference[0];
     float sum = 0;
@@ -90,24 +89,22 @@ void stats(float* difference, int size){
 
     }
     
-    float mean = sum / size;
-
-    float percentageNonZero = nonzeros/size;
+    float meanWithZeros = sum / size;
+    float meanWithoutZeros = sum/nonzeros;
     
+    printf("Total elements in a message: %d\n", size);
+    printf("Elements that are different: %d\n", nonzeros);
     printf("Maximum difference: %f\n", max);
-    printf("Mean difference: %f\n", mean);
-    printf("Percentage of elements that are different: %f\n", percentageNonZero);
-
+    printf("Mean difference (including zeros): %f\n", meanWithZeros);
+    printf("Mean difference (not including zeros): %f\n", meanWithoutZeros);
 }
-
-
 
 
 int main(int argc, char *argv[]) {
 
     int nDev = 4;
     int devices[4] = {0,1,2,3};
-    int size = 100000;
+    int size = 1000000;
     int pair[2];
 
     half **buff = (half **) malloc(nDev * sizeof(half *));
@@ -124,7 +121,7 @@ int main(int argc, char *argv[]) {
         srand(20214229*i);
 
         for(int j = 0; j<size; ++j){
-          input[i][j] = (half) (rand()/(RAND_MAX-1.0))/nDev;
+          input[i][j] = (half) (rand()/(RAND_MAX-1.0));
         }
     }
 
@@ -165,19 +162,18 @@ int main(int argc, char *argv[]) {
     float* difference = (float *) malloc(size*sizeof(float));
 
 
-    int device = 1; 
+    for(int device = 0; device<nDev; ++device){
+        printf("\n\nDevice %d\n", device);
+        
+        for(int j=0; j<size; ++j){
+            difference[j] = fabs(output1[device][j] - output2[device][j]);
+            // if(output1[1][j]!=output2[1][j]){
+            //   printf("Found difference, device %d index %d, %.12f vs %.12f \n", i, j, (float) output1[i][j], (float) output2[i][j]);
+            // }  
+        }
 
-    printf("Device %d\n", device);
-    
-    for(int j=0; j<size; ++j){
-        difference[j] = fabs(output1[device][j] - output2[device][j]);
-        // if(output1[1][j]!=output2[1][j]){
-        //   printf("Found difference, device %d index %d, %.12f vs %.12f \n", i, j, (float) output1[i][j], (float) output2[i][j]);
-        // }  
+        stats(difference, size);
     }
-
-    stats(difference, size);
-
     //cleaning up
     for(int i = 0; i<nDev; ++i){
       free(input[i]);

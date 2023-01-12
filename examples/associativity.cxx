@@ -55,6 +55,22 @@ int performAllReduce(int gDevs, int* group, float **buff, cudaStream_t* s, int s
     return 0;
 }
 
+int setup(int nDev, float** buff, float** input, cudaStream_t* s, int size){
+    for (int i = 0; i < nDev; ++i) {
+        CUDACHECK(cudaSetDevice(i));
+        CUDACHECK(cudaMalloc(buff + i, size * sizeof(float)));
+        CUDACHECK(cudaMemcpy(buff[i], input[i], size*sizeof(float), cudaMemcpyHostToDevice));
+        CUDACHECK(cudaStreamCreate(s + i));
+    }
+}
+
+int finishup(int nDev, float** buff, float** output, int size){
+   for (int i = 0; i < nDev; ++i) {
+        CUDACHECK(cudaSetDevice(i));
+        CUDACHECK(cudaMemcpy(output[i], buff[i], size*sizeof(float), cudaMemcpyDeviceToHost));
+        CUDACHECK(cudaFree(buff[i]));
+    }
+}
 
 int main(int argc, char *argv[]) {
 
@@ -63,26 +79,26 @@ int main(int argc, char *argv[]) {
     int pair[2];
 
     float **buff = (float **) malloc(nDev * sizeof(float *));
-    float **data = (float **) malloc(nDev * sizeof(float *));
+    float **input = (float **) malloc(nDev * sizeof(float *));
+    float **outputTogether = (float **) malloc(nDev * sizeof(float *)); // for AllReduce between all 4 processors simultaneously
+    float **outputPartial = (float **) malloc(nDev * sizeof(float *)); // for consecutive res of partial allreduce
     cudaStream_t *s = (cudaStream_t *) malloc(sizeof(cudaStream_t) * nDev);
     
+    for(int i=0; i<nDev; ++i){
+        input[i] = (float *)malloc(size*sizeof(float));
+        outputTogether[i] = (float *)malloc(size*sizeof(float));
+        outputPartial[i] = (float *)malloc(size*sizeof(float));
 
-    for (int i = 0; i < nDev; ++i) {
-        data[i] = (float *)malloc(size*sizeof(float));
-        
         srand(20214229*i);
 
         for(int j = 0; j<size; ++j){
-          data[i][j] = (float)rand()/(RAND_MAX/100);
+          input[i][j] = (float)rand()/(RAND_MAX/100);
         }
-
-        CUDACHECK(cudaSetDevice(i));
-        CUDACHECK(cudaMalloc(buff + i, size * sizeof(float)));
-        CUDACHECK(cudaMemcpy(buff[i], data[i], size*sizeof(float), cudaMemcpyHostToDevice));
-        CUDACHECK(cudaStreamCreate(s + i));
     }
 
-    //Communication starts here
+
+    // Partial Comm
+    setup(nDev, buff, input, s, size);
     pair[0] = 0;
     pair[1] = 1;
     performAllReduce(2, pair, buff, s, size);
@@ -90,7 +106,7 @@ int main(int argc, char *argv[]) {
     pair[0] = 2;
     pair[1] = 3;
     performAllReduce(2, pair, buff, s, size);
-   
+
     pair[0] = 0;
     pair[1] = 2;
     performAllReduce(2, pair, buff, s, size);
@@ -99,21 +115,26 @@ int main(int argc, char *argv[]) {
     pair[1] = 3;
     performAllReduce(2, pair, buff, s, size);
     
-    // int allDevices[4] = {0,1,2,3};
-    // performAllReduce(4, allDevices, buff, s, size);
+    finishup(nDev, buff, outputPartial, size);
 
-    for (int i = 0; i < nDev; ++i) {
-        CUDACHECK(cudaSetDevice(i));
-        CUDACHECK(cudaMemcpy(data[i], buff[i], size*sizeof(float), cudaMemcpyDeviceToHost));
-        CUDACHECK(cudaFree(buff[i]));
-    }
+    //zusammen
+
+    int devices[4] = {0,1,2,3};
+    setup(nDev, buff, input, s, size);
+    performAllReduce(4, devices, buff, s, size);
+    finishup(nDev, buff, outputTogether, size);   
     
-    printf("%.15f \n", data[0][1434]);
-    printf("%.15f \n", data[1][1434]);
-    printf("%.15f \n", data[2][1434]);
-    printf("%.15f \n", data[3][1434]);
+    //checking
 
 
-   
+
+
+    //cleaning up
+    for(int i = 0; i<nDev; ++i){
+      free(input[i]);
+      free(outputTogether[i]);
+      free(outputPartial[i]);
+    }
+
     return 0;
 }

@@ -7,7 +7,7 @@
 #include "nccl.h"
 #include <stdlib.h>
 #include <unistd.h>
-
+#include <math.h>
 
 #define CUDACHECK(cmd) do {                         \
   cudaError_t e = cmd;                              \
@@ -28,24 +28,22 @@
 } while(0)
 
 
-int performAllReduce(int gDevs, int* group, float **buff, cudaStream_t* s, int size){
+int performAllReduce(int gDevs, int* group, int* order, half **buff, cudaStream_t* s, int size){
 
     ncclComm_t comms[gDevs];
     ncclCommInitAll(comms, gDevs, group);
 
-
     NCCLCHECK(ncclGroupStart());
     for (int i = 0; i < gDevs; ++i) {
-      printf("salam allreduce started on device %d \n", group[i]);
-      NCCLCHECK(ncclAllReduce((const void *) buff[group[i]],
-                                (void *) buff[group[i]], size, ncclFloat, ncclSum,
-                                comms[i], s[group[i]]));
+      NCCLCHECK(ncclAllReduce((const void *) buff[group[order[i]]],
+                                (void *) buff[group[order[i]]], size, ncclFloat16, ncclSum,
+                                comms[order[i]], s[group[order[i]]]));
     }
     NCCLCHECK(ncclGroupEnd());
     
     for (int i = 0; i < gDevs; ++i) {
-        CUDACHECK(cudaSetDevice(group[i]));
-        CUDACHECK(cudaStreamSynchronize(s[group[i]]));
+        CUDACHECK(cudaSetDevice(group[order[i]]));
+        CUDACHECK(cudaStreamSynchronize(s[group[order[i]]]));
     }
 
      for (int i = 0; i < gDevs; ++i) {
@@ -55,86 +53,139 @@ int performAllReduce(int gDevs, int* group, float **buff, cudaStream_t* s, int s
     return 0;
 }
 
-int setup(int nDev, float** buff, float** input, cudaStream_t* s, int size){
+int setup(int nDev, half** buff, half** input, cudaStream_t* s, int size){
     for (int i = 0; i < nDev; ++i) {
         CUDACHECK(cudaSetDevice(i));
-        CUDACHECK(cudaMalloc(buff + i, size * sizeof(float)));
-        CUDACHECK(cudaMemcpy(buff[i], input[i], size*sizeof(float), cudaMemcpyHostToDevice));
+        CUDACHECK(cudaMalloc(buff + i, size * sizeof(half)));
+        CUDACHECK(cudaMemcpy(buff[i], input[i], size*sizeof(half), cudaMemcpyHostToDevice));
         CUDACHECK(cudaStreamCreate(s + i));
     }
+    return 0;
 }
 
-int finishup(int nDev, float** buff, float** output, int size){
+int finishup(int nDev, half** buff, half** output, int size){
    for (int i = 0; i < nDev; ++i) {
         CUDACHECK(cudaSetDevice(i));
-        CUDACHECK(cudaMemcpy(output[i], buff[i], size*sizeof(float), cudaMemcpyDeviceToHost));
+        CUDACHECK(cudaMemcpy(output[i], buff[i], size*sizeof(half), cudaMemcpyDeviceToHost));
         CUDACHECK(cudaFree(buff[i]));
     }
+    return 0;
 }
+
+
+void stats(float* difference, int size){
+    float max = difference[0];
+    float sum = 0;
+    int nonzeros = 0;
+    for (int i = 1; i < size; i++) {
+        sum += difference[i];
+        
+        if (difference[i] > max) {
+            max = difference[i];
+        }
+
+        if (difference[i]!=0) {
+          nonzeros++;
+        }
+
+    }
+    
+    float mean = sum / size;
+
+    float percentageNonZero = nonzeros/size;
+    
+    printf("Maximum difference: %f\n", max);
+    printf("Mean difference: %f\n", mean);
+    printf("Percentage of elements that are different: %f\n", percentageNonZero);
+
+}
+
+
+
 
 int main(int argc, char *argv[]) {
 
     int nDev = 4;
-    int size = 2621440;
+    int devices[4] = {0,1,2,3};
+    int size = 100000;
     int pair[2];
 
-    float **buff = (float **) malloc(nDev * sizeof(float *));
-    float **input = (float **) malloc(nDev * sizeof(float *));
-    float **outputTogether = (float **) malloc(nDev * sizeof(float *)); // for AllReduce between all 4 processors simultaneously
-    float **outputPartial = (float **) malloc(nDev * sizeof(float *)); // for consecutive res of partial allreduce
+    half **buff = (half **) malloc(nDev * sizeof(half *));
+    half **input = (half **) malloc(nDev * sizeof(half *));
+    half **output1 = (half **) malloc(nDev * sizeof(half *)); // for AllReduce between all 4 processors simultaneously
+    half **output2 = (half **) malloc(nDev * sizeof(half *)); // for consecutive res of partial allreduce
     cudaStream_t *s = (cudaStream_t *) malloc(sizeof(cudaStream_t) * nDev);
     
     for(int i=0; i<nDev; ++i){
-        input[i] = (float *)malloc(size*sizeof(float));
-        outputTogether[i] = (float *)malloc(size*sizeof(float));
-        outputPartial[i] = (float *)malloc(size*sizeof(float));
+        input[i] = (half *)malloc(size*sizeof(half));
+        output1[i] = (half *)malloc(size*sizeof(half));
+        output2[i] = (half *)malloc(size*sizeof(half));
 
         srand(20214229*i);
 
         for(int j = 0; j<size; ++j){
-          input[i][j] = (float)rand()/(RAND_MAX/100);
+          input[i][j] = (half) (rand()/(RAND_MAX-1.0))/nDev;
         }
     }
 
+
+    int pairorder[2] = {0,1}; //order always expressed in indecies
+    int order1[4] = {3,1,2,0};
+    // int order2[4] = {0,1,2,3};
 
     // Partial Comm
     setup(nDev, buff, input, s, size);
     pair[0] = 0;
     pair[1] = 1;
-    performAllReduce(2, pair, buff, s, size);
+    performAllReduce(2, pair, pairorder, buff, s, size);
 
     pair[0] = 2;
     pair[1] = 3;
-    performAllReduce(2, pair, buff, s, size);
+    performAllReduce(2, pair, pairorder, buff, s, size);
 
     pair[0] = 0;
     pair[1] = 2;
-    performAllReduce(2, pair, buff, s, size);
+    performAllReduce(2, pair, pairorder, buff, s, size);
 
     pair[0] = 1;
     pair[1] = 3;
-    performAllReduce(2, pair, buff, s, size);
+    performAllReduce(2, pair, pairorder, buff, s, size);
     
-    finishup(nDev, buff, outputPartial, size);
+    // performAllReduce(4, devices, order2, buff, s, size);
+    finishup(nDev, buff, output1, size);
 
     //zusammen
 
-    int devices[4] = {0,1,2,3};
     setup(nDev, buff, input, s, size);
-    performAllReduce(4, devices, buff, s, size);
-    finishup(nDev, buff, outputTogether, size);   
+    performAllReduce(4, devices, order1, buff, s, size);
+    finishup(nDev, buff, output2, size);   
     
     //checking
 
+    float* difference = (float *) malloc(size*sizeof(float));
 
 
+    int device = 1; 
+
+    printf("Device %d\n", device);
+    
+    for(int j=0; j<size; ++j){
+        difference[j] = fabs(output1[device][j] - output2[device][j]);
+        // if(output1[1][j]!=output2[1][j]){
+        //   printf("Found difference, device %d index %d, %.12f vs %.12f \n", i, j, (float) output1[i][j], (float) output2[i][j]);
+        // }  
+    }
+
+    stats(difference, size);
 
     //cleaning up
     for(int i = 0; i<nDev; ++i){
       free(input[i]);
-      free(outputTogether[i]);
-      free(outputPartial[i]);
+      free(output1[i]);
+      free(output2[i]);
     }
+
+    free(difference);
 
     return 0;
 }

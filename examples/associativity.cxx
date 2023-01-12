@@ -28,7 +28,7 @@
 } while(0)
 
 
-int performAllReduce(int gDevs, int* group, float **sendbuff, float **recvbuff, cudaStream_t* s, int size){
+int performAllReduce(int gDevs, int* group, float **buff, cudaStream_t* s, int size){
 
     ncclComm_t comms[gDevs];
     ncclCommInitAll(comms, gDevs, group);
@@ -37,8 +37,8 @@ int performAllReduce(int gDevs, int* group, float **sendbuff, float **recvbuff, 
     NCCLCHECK(ncclGroupStart());
     for (int i = 0; i < gDevs; ++i) {
       printf("salam allreduce started on device %d \n", group[i]);
-      NCCLCHECK(ncclAllReduce((const void *) sendbuff[group[i]],
-                                (void *) recvbuff[group[i]], size, ncclFloat, ncclSum,
+      NCCLCHECK(ncclAllReduce((const void *) buff[group[i]],
+                                (void *) buff[group[i]], size, ncclFloat, ncclSum,
                                 comms[i], s[group[i]]));
     }
     NCCLCHECK(ncclGroupEnd());
@@ -60,10 +60,9 @@ int main(int argc, char *argv[]) {
 
     int nDev = 4;
     int size = 2621440;
+    int pair[2];
 
-
-    float **sendbuff = (float **) malloc(nDev * sizeof(float *));
-    float **recvbuff = (float **) malloc(nDev * sizeof(float *));
+    float **buff = (float **) malloc(nDev * sizeof(float *));
     float **data = (float **) malloc(nDev * sizeof(float *));
     cudaStream_t *s = (cudaStream_t *) malloc(sizeof(cudaStream_t) * nDev);
     
@@ -74,43 +73,45 @@ int main(int argc, char *argv[]) {
         srand(20214229*i);
 
         for(int j = 0; j<size; ++j){
-          data[i][j] = i;//(float)rand()/(RAND_MAX/100);
+          data[i][j] = (float)rand()/(RAND_MAX/100);
         }
 
         CUDACHECK(cudaSetDevice(i));
-        CUDACHECK(cudaMalloc(sendbuff + i, size * sizeof(float)));
-        CUDACHECK(cudaMalloc(recvbuff + i, size * sizeof(float)));
-        CUDACHECK(cudaMemcpy(sendbuff[i], data[i], size*sizeof(float), cudaMemcpyHostToDevice));
-        CUDACHECK(cudaMemset(recvbuff[i], 0, size*sizeof(float)));
+        CUDACHECK(cudaMalloc(buff + i, size * sizeof(float)));
+        CUDACHECK(cudaMemcpy(buff[i], data[i], size*sizeof(float), cudaMemcpyHostToDevice));
         CUDACHECK(cudaStreamCreate(s + i));
     }
 
     //Communication starts here
-    int group1[2] = {2,3};
-    performAllReduce(2, group1, sendbuff, recvbuff, s, size);
-    sleep(1);
+    pair[0] = 0;
+    pair[1] = 1;
+    performAllReduce(2, pair, buff, s, size);
 
-    int group2[2] = {0,1};
-    performAllReduce(2, group2, sendbuff, recvbuff, s, size);
+    pair[0] = 2;
+    pair[1] = 3;
+    performAllReduce(2, pair, buff, s, size);
+   
+    pair[0] = 0;
+    pair[1] = 2;
+    performAllReduce(2, pair, buff, s, size);
+
+    pair[0] = 1;
+    pair[1] = 3;
+    performAllReduce(2, pair, buff, s, size);
     
-    sleep(1);
-    int group3[2] = {1,2};
-    performAllReduce(2, group3, sendbuff, recvbuff, s, size);
-    
-    // int group1[4] = {0,1,2,3};
-    // performAllReduce(4, group1, sendbuff, recvbuff, s, size);
+    // int allDevices[4] = {0,1,2,3};
+    // performAllReduce(4, allDevices, buff, s, size);
 
     for (int i = 0; i < nDev; ++i) {
         CUDACHECK(cudaSetDevice(i));
-        CUDACHECK(cudaMemcpy(data[i], recvbuff[i], size*sizeof(float), cudaMemcpyDeviceToHost));
-        CUDACHECK(cudaFree(sendbuff[i]));
-        CUDACHECK(cudaFree(recvbuff[i]));
+        CUDACHECK(cudaMemcpy(data[i], buff[i], size*sizeof(float), cudaMemcpyDeviceToHost));
+        CUDACHECK(cudaFree(buff[i]));
     }
     
-    printf("%.12f \n", data[0][1434]);
-    printf("%.12f \n", data[1][1434]);
-    printf("%.12f \n", data[2][1434]);
-    printf("%.12f \n", data[3][1434]);
+    printf("%.15f \n", data[0][1434]);
+    printf("%.15f \n", data[1][1434]);
+    printf("%.15f \n", data[2][1434]);
+    printf("%.15f \n", data[3][1434]);
 
 
    

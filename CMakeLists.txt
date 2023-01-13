@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 2.8)
 
-project(nccl-examples)
+project(nccl-tests)
 
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
@@ -22,4 +22,4 @@ endif ()
 include(FindCUDA)
 include_directories(/usr/local/cuda/include ${MPI_INCLUDE_PATH})
 
-add_subdirectory(examples)
+add_subdirectory(scripts)

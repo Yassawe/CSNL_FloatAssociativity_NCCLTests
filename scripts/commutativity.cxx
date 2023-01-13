@@ -1,7 +1,3 @@
-//
-// Example 1: Single Process, Single Thread, Multiple Devices
-//
-
 #include <stdio.h>
 #include "cuda_runtime.h"
 #include "nccl.h"

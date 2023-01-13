@@ -56,10 +56,11 @@ static void getHostName(char *hostname, int maxlen) {
 int main(int argc, char *argv[]) {
 
     setenv("NCCL_DEBUG", "INFO", true);
-    setenv("NCCL_MIN_NCHANNELS", 2, true);
-    setenv("NCCL_MAX_NCHANNELS", 2, true);
+    setenv("NCCL_MIN_NCHANNELS", "2", true);
+    setenv("NCCL_MAX_NCHANNELS", "2", true);
+    setenv("NCCL_ALGO", "^TREES, ^COLLNETDIRECT, ^COLLNETCHAIN", true);
 
-    int size = 32 * 1024 * 1024;
+    int size = 8388608;
     int myRank, nRanks, localRank = 0;
 
     // initializing MPI

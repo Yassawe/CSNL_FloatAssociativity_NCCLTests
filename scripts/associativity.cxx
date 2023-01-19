@@ -24,13 +24,12 @@
 } while(0)
 
 
-#ifdef false
-  typedef half datatype;
-  #define NCCLTYPE ncclFloat16
-#else 
-  typedef float datatype;
-  #define NCCLTYPE ncclFloat
-#endif
+typedef half datatype;
+#define NCCLTYPE ncclFloat16
+
+ 
+// typedef float datatype;
+// #define NCCLTYPE ncclFloat
 
 
 int performAllReduce(int gDevs, int* group, int* order, datatype **buff, cudaStream_t* s, int size){
@@ -99,14 +98,13 @@ void stats(float* difference, int size){
     
     printf("Total elements in a message: %d\n", size);
     printf("Elements that are different: %d\n", nonzeros);
-    printf("Maximum difference: %.16f\n", max);
-    printf("Mean difference (including zeros): %.16f\n", meanWithZeros);
+    printf("Maximum difference: %.10f\n", max);
+    printf("Mean difference (including zeros): %.10f\n", meanWithZeros);
     printf("Mean difference (not including zeros): %.16f\n\n", meanWithoutZeros);
 }
 
 
 int main(int argc, char *argv[]) {
-
     int nDev = 4;
     int devices[4] = {0,1,2,3};
     int size = 1000000;
@@ -116,7 +114,7 @@ int main(int argc, char *argv[]) {
     datatype **input = (datatype **) malloc(nDev * sizeof(datatype *));
     datatype **output1 = (datatype **) malloc(nDev * sizeof(datatype *)); // for AllReduce between all 4 processors simultaneously
     datatype **output2 = (datatype **) malloc(nDev * sizeof(datatype *)); // for consecutive res of partial allreduce
-    cudaStream_t *s = (cudaStream_t *) malloc(sizeof(cudaStream_t) * nDev);
+    cudaStream_t *s = (cudaStream_t *) malloc(nDev*sizeof(cudaStream_t));
     
     for(int i=0; i<nDev; ++i){
         input[i] = (datatype *)malloc(size*sizeof(datatype));

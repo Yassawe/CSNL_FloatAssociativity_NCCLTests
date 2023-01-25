@@ -14,14 +14,12 @@
 
 typedef half datatype;
 #define NCCLTYPE ncclFloat16
-#define FILEPATH "../csv/multithread/"
+#define FILEPATH "./csv/multithread/"
 #define REPS 1000
 
 
 using namespace std;
 
-typedef half datatype;
-#define NCCLTYPE ncclFloat16
 
 
 
@@ -74,9 +72,7 @@ static void getHostName(char *hostname, int maxlen) {
 
 
 int performAllReduce(int nRanks, int myRank, int localRank, ncclUniqueId* id, cudaStream_t* s, datatype** buff, int size){
-
     ncclComm_t comm;
-    
     CUDACHECK(cudaSetDevice(localRank));
 
     NCCLCHECK(ncclCommInitRank(&comm, nRanks, *id, myRank));
@@ -86,9 +82,7 @@ int performAllReduce(int nRanks, int myRank, int localRank, ncclUniqueId* id, cu
                             comm, *s));
 
     CUDACHECK(cudaStreamSynchronize(*s));
-
     NCCLCHECK(ncclCommDestroy(comm));
-
     return 0;
 }
 
@@ -115,6 +109,18 @@ int finishup(datatype** buff, datatype* output, int size){
 
     CUDACHECK(cudaMemcpy(output, *buff, size*sizeof(datatype), cudaMemcpyDeviceToHost));
     CUDACHECK(cudaFree(*buff));
+    return 0;
+}
+
+int writefile(int localRank, datatype* output, int size, int iter){
+
+    std::ofstream f;
+    f.open(FILEPATH+to_string(localRank)+".csv", ios::out | ios::app);
+
+    for(int i=0; i<size; ++i){
+      f<<iter<<","<<std::setprecision(16)<<output[i]<<std::endl;
+    }
+    f.close();
     return 0;
 }
 
@@ -160,13 +166,17 @@ int main(int argc, char *argv[]) {
         input[i] = (datatype) (rand()/(RAND_MAX-1.0))/4;
     }
 
+
+    for (int iter=0; iter<REPS; ++iter){
+         setup(&id, &s, localRank, myRank, &buff, input, size);
+        performAllReduce(nRanks, myRank, localRank, &id, &s, &buff, size);
+        finishup(&buff, output, size); 
+        writefile(localRank, output, size, iter);
+    }
     
-    setup(&id, &s, localRank, myRank, &buff, input, size);
-    performAllReduce(nRanks, myRank, localRank, &id, &s, &buff, size);
-    finishup(&buff, output, size); 
-
-
-    std::cout<<output[785]<<std::endl;
+    
+    free(input);
+    free(output);
 
     // finalizing MPI
     MPICHECK(MPI_Finalize());

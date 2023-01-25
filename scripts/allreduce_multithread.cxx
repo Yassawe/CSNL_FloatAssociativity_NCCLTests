@@ -1,11 +1,30 @@
+#include "mpi.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include "cuda_runtime.h"
 #include "nccl.h"
-#include "mpi.h"
 #include <unistd.h>
 #include <stdint.h>
-#include <stdlib.h>
+
+#include <iostream>
+#include <fstream>
+#include <iomanip>
+
+
+
+typedef half datatype;
+#define NCCLTYPE ncclFloat16
+#define FILEPATH "../csv/multithread/"
+#define REPS 1000
+
+
+using namespace std;
+
+typedef half datatype;
+#define NCCLTYPE ncclFloat16
+
+
+
 
 #define MPICHECK(cmd) do {                          \
   int e = cmd;                                      \
@@ -53,23 +72,65 @@ static void getHostName(char *hostname, int maxlen) {
     }
 }
 
+
+int performAllReduce(int nRanks, int myRank, int localRank, ncclUniqueId* id, cudaStream_t* s, datatype** buff, int size){
+
+    ncclComm_t comm;
+    
+    CUDACHECK(cudaSetDevice(localRank));
+
+    NCCLCHECK(ncclCommInitRank(&comm, nRanks, *id, myRank));
+
+    NCCLCHECK(ncclAllReduce((const void *) *buff, (void *) *buff,
+                            size, NCCLTYPE, ncclSum,
+                            comm, *s));
+
+    CUDACHECK(cudaStreamSynchronize(*s));
+
+    NCCLCHECK(ncclCommDestroy(comm));
+
+    return 0;
+}
+
+
+
+int setup(ncclUniqueId* id, cudaStream_t* s, int localRank, int myRank, datatype** buff, datatype* input, int size){
+    
+    if (myRank == 0) {
+        ncclGetUniqueId(id);
+    }
+
+    MPICHECK(MPI_Bcast((void *) id, sizeof(*id), MPI_BYTE, 0,
+                       MPI_COMM_WORLD));
+
+    CUDACHECK(cudaSetDevice(localRank));
+    CUDACHECK(cudaMalloc(buff, size * sizeof(datatype)));
+    CUDACHECK(cudaMemcpy(*buff, input, size*sizeof(datatype), cudaMemcpyHostToDevice));
+    CUDACHECK(cudaStreamCreate(s));
+   
+    return 0; 
+}
+
+int finishup(datatype** buff, datatype* output, int size){
+
+    CUDACHECK(cudaMemcpy(output, *buff, size*sizeof(datatype), cudaMemcpyDeviceToHost));
+    CUDACHECK(cudaFree(*buff));
+    return 0;
+}
+
+
 int main(int argc, char *argv[]) {
 
-    setenv("NCCL_DEBUG", "INFO", true);
-    setenv("NCCL_MIN_NCHANNELS", "2", true);
-    setenv("NCCL_MAX_NCHANNELS", "2", true);
-    setenv("NCCL_ALGO", "^TREES, ^COLLNETDIRECT, ^COLLNETCHAIN", true);
 
-    int size = 8388608;
+    int size = 1000;
     int myRank, nRanks, localRank = 0;
 
-    // initializing MPI
+
     MPICHECK(MPI_Init(&argc, &argv));
     MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
     MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &nRanks));
 
-    // calculating localRank based on hostname which is used in
-    // selecting a GPU
+
     uint64_t hostHashs[nRanks];
     char hostname[1024];
     getHostName(hostname, 1024);
@@ -86,40 +147,26 @@ int main(int argc, char *argv[]) {
     }
 
     ncclUniqueId id;
-    ncclComm_t comm;
-    float *sendbuff, *recvbuff;
+    
+
+    datatype* buff;
+    datatype* input = (datatype *)malloc(size*sizeof(datatype));
+    datatype* output = (datatype *)malloc(size*sizeof(datatype));
+
     cudaStream_t s;
+   
 
-    // get NCCL unique ID at rank 0 and broadcast it to all others
-    if (myRank == 0) {
-        ncclGetUniqueId(&id);
+    for (int i = 0; i<size; ++i){
+        input[i] = (datatype) (rand()/(RAND_MAX-1.0))/4;
     }
-    MPICHECK(MPI_Bcast((void *) &id, sizeof(id), MPI_BYTE, 0,
-                       MPI_COMM_WORLD));
 
-    // picking a GPU based on localRank, allocate device buffers
-    CUDACHECK(cudaSetDevice(localRank));
-    CUDACHECK(cudaMalloc(&sendbuff, size * sizeof(float)));
-    CUDACHECK(cudaMalloc(&recvbuff, size * sizeof(float)));
-    CUDACHECK(cudaStreamCreate(&s));
+    
+    setup(&id, &s, localRank, myRank, &buff, input, size);
+    performAllReduce(nRanks, myRank, localRank, &id, &s, &buff, size);
+    finishup(&buff, output, size); 
 
-    // initializing NCCL
-    NCCLCHECK(ncclCommInitRank(&comm, nRanks, id, myRank));
 
-    // communicating using NCCL
-    NCCLCHECK(ncclAllReduce((const void *) sendbuff, (void *) recvbuff,
-                            size, ncclFloat, ncclSum,
-                            comm, s));
-
-    // completing NCCL operation by synchronizing on the CUDA stream
-    CUDACHECK(cudaStreamSynchronize(s));
-
-    // free device buffers
-    CUDACHECK(cudaFree(sendbuff));
-    CUDACHECK(cudaFree(recvbuff));
-
-    // finalizing NCCL
-    ncclCommDestroy(comm);
+    std::cout<<output[785]<<std::endl;
 
     // finalizing MPI
     MPICHECK(MPI_Finalize());

@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <math.h>
+#include <iostream>
+#include <fstream>
+#include <iomanip>
 
 #define CUDACHECK(cmd) do {                         \
   cudaError_t e = cmd;                              \
@@ -26,7 +29,10 @@
 
 typedef half datatype;
 #define NCCLTYPE ncclFloat16
+#define FILEPATH "./csv/singlethread/"
+#define REPS 1000
 
+using namespace std;
  
 // typedef float datatype;
 // #define NCCLTYPE ncclFloat
@@ -50,7 +56,7 @@ int performAllReduce(int gDevs, int* group, int* order, datatype **buff, cudaStr
         CUDACHECK(cudaStreamSynchronize(s[group[order[i]]]));
     }
 
-     for (int i = 0; i < gDevs; ++i) {
+    for (int i = 0; i < gDevs; ++i) {
         NCCLCHECK(ncclCommDestroy(comms[i]));
     }
 
@@ -67,14 +73,31 @@ int setup(int nDev, datatype** buff, datatype** input, cudaStream_t* s, int size
     return 0;
 }
 
-int finishup(int nDev, datatype** buff, datatype** output, int size){
+int finishup(int nDev, datatype** buff, datatype** output, int size, cudaStream_t* s){
    for (int i = 0; i < nDev; ++i) {
         CUDACHECK(cudaSetDevice(i));
         CUDACHECK(cudaMemcpy(output[i], buff[i], size*sizeof(datatype), cudaMemcpyDeviceToHost));
         CUDACHECK(cudaFree(buff[i]));
+        CUDACHECK(cudaStreamDestroy(s[i]));
     }
     return 0;
 }
+
+int writefile(int nDev, datatype** output, int size, int iter){
+
+  for(int d = 0; d<nDev; ++d){
+    std::ofstream f;
+    f.open(FILEPATH+to_string(d)+".csv", ios::out | ios::app);
+
+    for(int i=0; i<size; ++i){
+      f<<iter<<","<<std::setprecision(16)<<output[d][i]<<std::endl;
+    }
+    f.close();
+  }
+  return 0;
+}
+
+
 
 void stats(float* difference, int size){
     float max = difference[0];
@@ -107,19 +130,16 @@ void stats(float* difference, int size){
 int main(int argc, char *argv[]) {
     int nDev = 4;
     int devices[4] = {0,1,2,3};
-    int size = 1000000;
-    int pair[2];
+    int size = 1000;
 
     datatype **buff = (datatype **) malloc(nDev * sizeof(datatype *));
     datatype **input = (datatype **) malloc(nDev * sizeof(datatype *));
-    datatype **output1 = (datatype **) malloc(nDev * sizeof(datatype *)); // for AllReduce between all 4 processors simultaneously
-    datatype **output2 = (datatype **) malloc(nDev * sizeof(datatype *)); // for consecutive res of partial allreduce
+    datatype **output = (datatype **) malloc(nDev * sizeof(datatype *)); 
     cudaStream_t *s = (cudaStream_t *) malloc(nDev*sizeof(cudaStream_t));
     
     for(int i=0; i<nDev; ++i){
         input[i] = (datatype *)malloc(size*sizeof(datatype));
-        output1[i] = (datatype *)malloc(size*sizeof(datatype));
-        output2[i] = (datatype *)malloc(size*sizeof(datatype));
+        output[i] = (datatype *)malloc(size*sizeof(datatype));
 
         srand(20214229*i);
 
@@ -129,79 +149,18 @@ int main(int argc, char *argv[]) {
     }
 
 
-    int pairorder[2] = {0,1}; //order always expressed in indecies
-    // int order1[4] = {3,1,2,0};
-    // int order2[4] = {0,1,2,3};
-
-    //CONFIG 1
-    setup(nDev, buff, input, s, size);
-    pair[0] = 0;
-    pair[1] = 1;
-    performAllReduce(2, pair, pairorder, buff, s, size);
-
-    pair[0] = 2;
-    pair[1] = 3;
-    performAllReduce(2, pair, pairorder, buff, s, size);
-
-    pair[0] = 0;
-    pair[1] = 2;
-    performAllReduce(2, pair, pairorder, buff, s, size);
-
-    pair[0] = 1;
-    pair[1] = 3;
-    performAllReduce(2, pair, pairorder, buff, s, size);
-    finishup(nDev, buff, output1, size);
-
-    //CONFIG 2
-
-    // setup(nDev, buff, input, s, size);
-    // pair[0] = 0;
-    // pair[1] = 2;
-    // performAllReduce(2, pair, pairorder, buff, s, size);
-
-    // pair[0] = 1;
-    // pair[1] = 3;
-    // performAllReduce(2, pair, pairorder, buff, s, size);
-
-    // pair[0] = 0;
-    // pair[1] = 1;
-    // performAllReduce(2, pair, pairorder, buff, s, size);
-
-    // pair[0] = 2;
-    // pair[1] = 3;
-    // performAllReduce(2, pair, pairorder, buff, s, size);
-    // finishup(nDev, buff, output2, size);
-
-
-    setup(nDev, buff, input, s, size);
-    performAllReduce(4, devices, devices, buff, s, size);
-    finishup(nDev, buff, output2, size);   
+    for(int iter=0; iter<REPS; ++iter){
+      setup(nDev, buff, input, s, size);
+      performAllReduce(4, devices, devices, buff, s, size);
+      finishup(nDev, buff, output, size, s);
+      writefile(nDev, output, size, iter);   
+    } 
     
-    //checking
-
-    float* difference = (float *) malloc(size*sizeof(float));
-
-
-    for(int device = 0; device<nDev; ++device){
-        printf("\n\nDevice %d\n", device);
-        
-        for(int j=0; j<size; ++j){
-            difference[j] = fabs(output1[device][j] - output2[device][j]);
-            // if(output1[device][j]!=output2[device][j]){
-            //   printf("Found difference, index %d, %.12f vs %.12f \n", j, (float) output1[device][j], (float) output2[device][j]);
-            // }  
-        }
-
-        stats(difference, size);
-    }
     //cleaning up
     for(int i = 0; i<nDev; ++i){
       free(input[i]);
-      free(output1[i]);
-      free(output2[i]);
+      free(output[i]);
     }
-
-    free(difference);
 
     return 0;
 }
